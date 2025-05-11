@@ -32,6 +32,10 @@ except Exception as e:
 db = client["pillDispenser"]
 collection = db["prescriptions"]
 
+@app.route('/')
+def home():
+    return 'Home Page Route'
+
 # Endpoint to get prescription
 @app.route('/get-prescription', methods=['POST'])
 def get_prescription():
