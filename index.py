@@ -1,61 +1,110 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 from pymongo import MongoClient
-from pymongo.server_api import ServerApi
+import serial
+import time
+import re
+from bson import ObjectId
 
 app = Flask(__name__)
 
-# Allow CORS for all domains
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-# Optionally add CORS headers after each request (browser compatibility)
-@app.after_request
-def after_request(response):
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-    response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-    return response
-
-# Connect to MongoDB Atlas
+# MongoDB connection
 client = MongoClient(
-    "mongodb+srv://kameshoffical06:kamesh1906@doctor.k2n8v.mongodb.net/?retryWrites=true&w=majority&appName=Doctor",
-    server_api=ServerApi('1')
+    "mongodb+srv://kameshoffical06:kamesh1906@doctor.k2n8v.mongodb.net/?retryWrites=true&w=majority&appName=Doctor"
 )
-
-# Test connection
-try:
-    client._connect()
-except Exception as e:
-    print("MongoDB connection error:", e)
-
-# Database and collection
 db = client["pillDispenser"]
 collection = db["prescriptions"]
 
+# Serial setup (update the port as per your system)
+try:
+    arduino = serial.Serial('COM6', 9600, timeout=1)  # Change COM port accordingly
+    time.sleep(2)  # Wait for Arduino to reset
+    print("✅ Arduino connected on COM6")
+except Exception as e:
+    print(f"❌ Failed to connect to Arduino: {e}")
+    arduino = None
+
+# Tablet mapping based on medicine names in DB
+tablet_mapping = {
+    "Diazepam - 5mg": "T1",
+    "Paracetamol - 500mg": "T2",
+    "Amoxicillin - 250mg": "T3",
+    "Ibuprofen - 400mg": "T4",
+    "Azithromycin - 250mg": "T5",
+    "Metformin - 500mg": "T6",
+    "Amlodipine - 5mg": "T7",
+    "Losartan - 50mg": "T8",
+}
+
+def convert_objectid_to_str(obj):
+    if isinstance(obj, list):
+        return [convert_objectid_to_str(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_objectid_to_str(v) for k, v in obj.items()}
+    elif isinstance(obj, ObjectId):
+        return str(obj)
+    else:
+        return obj
+
 @app.route('/')
 def home():
-    return 'Home Page Route'
+    return '🏠 Pill Dispenser Flask Server is Running!'
 
-# Endpoint to get prescription
 @app.route('/get-prescription', methods=['POST'])
 def get_prescription():
     data = request.get_json()
+
+    # Validate input
     patient_id = data.get('patientId')
-
     if not patient_id:
-        return jsonify({"error": "Patient ID is required"}), 400
+        return jsonify({"error": "Patient ID (codeId) is required"}), 400
 
+    # Validate patientId format: exactly 7 alphanumeric chars (adjust pattern as needed)
+    if not re.fullmatch(r'[a-zA-Z0-9]{7}', patient_id):
+        return jsonify({"error": "Invalid patientId format"}), 400
+
+    # Find prescription by codeId (codeId is a string, not ObjectId)
     prescription = collection.find_one({"codeId": patient_id}, projection={"_id": 0})
-    
-    if prescription and "medicines" in prescription:
-        for med in prescription["medicines"]:
-            med.pop("_id", None)
 
     if not prescription:
         return jsonify({"error": "No prescription found for this patient ID"}), 404
 
-    return jsonify(prescription)
+    # Convert any ObjectId in the prescription just in case
+    prescription = convert_objectid_to_str(prescription)
 
-# Run the Flask server on all network interfaces so other devices can access it
+    # Map medicines to tablet codes
+    tablet_codes = []
+    for med in prescription.get("medicines", []):
+        med_name = med.get("name")
+        code = tablet_mapping.get(med_name)
+        if code:
+            tablet_codes.append(code)
+        else:
+            print(f"⚠️ Medicine name not in mapping: '{med_name}'")
+
+    if not tablet_codes:
+        return jsonify({"error": "No matching tablets found in mapping"}), 404
+
+    # Send tablet codes to Arduino over serial
+    if arduino:
+        try:
+            to_send = ",".join(tablet_codes) + "\n"
+            print(f"Sending to Arduino: {to_send.strip()}")
+            arduino.write(to_send.encode())
+
+            time.sleep(1)  # Give Arduino some time to respond
+            while arduino.in_waiting:
+                response = arduino.readline().decode().strip()
+                print("Arduino response:", response)
+
+        except Exception as e:
+            print("Error communicating with Arduino:", e)
+
+    # Return success response with tablets and prescription data
+    return jsonify({
+        "status": "success",
+        "tablets": tablet_codes,
+        "prescription": prescription
+    })
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
