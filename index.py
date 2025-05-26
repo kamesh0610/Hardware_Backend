@@ -51,22 +51,23 @@ def find_arduino_port():
             return port.device
     return None
 
-# Fallback: mock Arduino if not found
-class MockArduino:
-    def write(self, data): print("🧪 Mock write:", data)
-    def readline(self): return b"OK\n"
-    @property
-    def in_waiting(self): return 1
+# # Fallback: mock Arduino if not found
+# class MockArduino:
+#     def write(self, data): print("🧪 Mock write:", data)
+#     def readline(self): return b"OK\n"
+#     @property
+#     def in_waiting(self): return 1
 
 # Setup serial communication
 try:
-    port = find_arduino_port() or 'COM10'  # Default to COM10 if auto-detect fails
+    port = find_arduino_port() or '/dev/ttyUSB0'  # Default to COM10 if auto-detect fails
+    print(port)
     arduino = serial.Serial(port, 9600, timeout=2)
     time.sleep(2)
     print(f"✅ Arduino connected on {port}")
 except Exception as e:
     print(f"❌ Failed to connect to Arduino: {e}")
-    arduino = MockArduino()
+    # arduino = MockArduino()
 
 # ObjectId to str utility
 def convert_objectid_to_str(obj):
